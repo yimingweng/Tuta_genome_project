@@ -491,9 +491,7 @@ sbatch -J tuta /blue/kawahara/yimingweng/universal_scripts/repeatmodeler2.slurm 
 /blue/kawahara/yimingweng/Tuta_genome_project/Tuta_first_assembly/purge/run2_with_short_reads/tuta_purge_run2.fasta \
 tuta_repeat
 ```
-<img src="https://drive.google.com/uc?export=view&id=19HOXfstmXAP083iLs_k8vkzdXNH9PeIG">
-
-
+<img src="https://github.com/yimingweng/Tuta_genome_project/blob/main/blobplot_results/tuta_blobplot.png">
 
 
 ```
