@@ -1,0 +1,14 @@
+HistoryId: MCID_62f55648fed53a0a5b3c077f
+QueryKey: 3
+ReleaseType: GenBank
+FileType: GENOME_FASTA
+Flat: true
+
+Query title: Select 1 document(s)
+    
+Search results count: 1
+Entries to download: 1
+
+GENOME_FASTA files in archive: 1
+Total size (bytes): 268086588
+Total time: 1 minute 42 seconds
