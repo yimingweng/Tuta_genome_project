@@ -494,6 +494,20 @@ tuta_repeat
 <img src="https://github.com/yimingweng/Tuta_genome_project/blob/main/blobplot_results/tuta_blobplot.png">
 
 
+## **11/07/2022** 
+**\# annotation**  
+**\# repeatmodeler**  
+**\# repeatmasker**   
+
+1. run Repeatmodeler
+```
+[yimingweng@login2 repeatmodeler]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/repeatmodeler
+
+sbatch -J tuta /blue/kawahara/yimingweng/universal_scripts/repeatmodeler2.slurm /blue/kawahara/yimingweng/Tuta_genome_project/assemblies/tuta_final_assembly.fasta tuta_repeat
+```
+
+2. run repeatmasker
 ```
 [yimingweng@login2 repeatmasker]$ pwd
 /blue/kawahara/yimingweng/Tuta_genome_project/annotation/repeatmasker
@@ -559,7 +573,7 @@ RepeatMasker -pa 32 -a -s \
 -dir ${prefix} \
 ${path}/${prefix}/${name}.masked.masked &> ./${prefix}/${prefix}_step3.out
 ```
-
+3. check the masing rate
 ```
 [yimingweng@login6 tuta_repeatmasker]$ pwd
 /blue/kawahara/yimingweng/Tuta_genome_project/annotation/repeatmasker/tuta_repeatmasker
@@ -569,8 +583,12 @@ softmasking rate is 54.40%
 hardmasking rate is 0%
 ```
 
+## **11/07/2022** 
+**\# annotation**  
+**\# braker2**  
+**\# TSEBRA**  
 
-braker2
+1. run braker2 with the protein database from orthoDB. The prothint data will be used to train the gene model 
 ```
 [yimingweng@login6 prothint]$ pwd
 /blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/prothint
@@ -579,6 +597,526 @@ sbatch -J tuta /blue/kawahara/yimingweng/universal_scripts/braker_prothint.slurm
 /blue/kawahara/yimingweng/Tuta_genome_project/annotation/repeatmasker/tuta_repeatmasker/tuta_final_assembly.fasta.masked.masked.masked \
 tuta_prothint
 ```
+
+2. run braker2 with the RNAseq data. The reads were download from NCBI originally published by [Camargo et al, 2015](https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-015-1841-5). There are 6 different life stages, and one got single end reads and the rest got paired end reads. 
+- download the reads
+```
+[yimingweng@login2 raw_reads]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/raw_reads
+
+sbatch SRR_download.slurm
+```
+- clean up the reads using [trimmomatic](http://www.usadellab.org/cms/?page=trimmomatic)
+```
+sbatch -J tuta_trimmomatic trimmomatic.slurm /blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/raw_reads/ /blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/trimmed_reads/
+
+###########################  script content  ###########################
+#!/bin/bash
+
+#SBATCH --job-name=%x_%j
+#SBATCH --output=%x_%j.log
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mem-per-cpu=4gb
+#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+
+module load trimmomatic/0.39
+
+inputdir=${1}
+outdir=${2}
+
+ls ${inputdir} | grep "fastq.gz" | cut -d "_" -f 1 | sort | uniq >> list.tmp
+IFS=$'\n'
+for sp in $(cat list.tmp)
+do
+  count=$(ls ${inputdir} | grep "${sp}" | wc -l)
+  echo -e "${sp}\t${count}" >> list2.tmp
+done
+
+cat list2.tmp | grep -Pw "2" | cut -d $'\t' -f 1 > pairlist.tmp
+cat list2.tmp | grep -Pw "1" | cut -d $'\t' -f 1 > singlelist.tmp
+
+
+for sample in $(cat pairlist.tmp)
+do
+    fq1=$(ls ${inputdir}/${sample}_1*)
+    fq2=$(ls ${inputdir}/${sample}_2*)
+    trimmomatic PE -threads 16 \
+    ${fq1} ${fq2} \
+    ${outdir}/${sample}_1_clean.fq.gz ${outdir}/${sample}_1_unpaired.fq.gz \
+    ${outdir}/${sample}_2_clean.fq.gz ${outdir}/${sample}_2_unpaired.fq.gz LEADING:3 TRAILING:3 MINLEN:36
+done
+
+for sample in $(cat singlelist.tmp)
+do
+    fq1=$(ls ${inputdir}/${sample}*)
+    trimmomatic SE -threads 16 \
+    ${fq1} \
+    ${outdir}/${sample}_1_clean.fq.gz LEADING:3 TRAILING:3 MINLEN:36
+done
+rm *tmp
+########################################################################
+```
+- map the reads to the genome assembly using [hisat](http://daehwankimlab.github.io/hisat2/manual/)
+
+```
+[yimingweng@login2 bam_files]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/bam_files
+
+sbatch -J tuta /blue/kawahara/yimingweng/universal_scripts/hisat.slurm \
+/blue/kawahara/yimingweng/Tuta_genome_project/assemblies/tuta_final_assembly.fasta \
+tuta_absoulata \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/trimmed_reads
+
+###########################  script content  ###########################
+#!/bin/bash
+#SBATCH --job-name=%x_hisat_%j
+#SBATCH --output=%x_hisat_%j.log
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mem-per-cpu=4gb
+#SBATCH --time=96:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+
+module load hisat2/2.2.1-3n
+
+genome=${1}
+species=${2}
+readdir=${3}
+
+hisat2-build ${genome} ${species}.fasta.base
+
+ls ${readdir} | grep "clean.fq.gz" | cut -d "_" -f 1 | sort | uniq >> list.tmp
+IFS=$'\n'
+for sp in $(cat list.tmp)
+do
+  count=$(ls ${readdir} | grep "clean" | grep "${sp}" | wc -l)
+  echo -e "${sp}\t${count}" >> list2.tmp
+done
+
+cat list2.tmp | grep -Pw "2" | cut -d $'\t' -f 1 > pairlist.tmp
+cat list2.tmp | grep -Pw "1" | cut -d $'\t' -f 1 > singlelist.tmp
+
+for sample in $(cat pairlist.tmp)
+do
+    fq1=$(ls ${readdir}/${sample}_1_clean*)
+    fq2=$(ls ${readdir}/${sample}_2_clean*)
+    name=$(echo ${sample} | cut -d "_" -f 1)
+    hisat2 -p 32 \
+    -x ${species}.fasta.base \
+    -1 ${fq1} -2 ${fq2} -S ${name}.sam --phred33 --novel-splicesite-outfile ${name}.junctions --rna-strandness FR
+done
+
+for sample in $(cat singlelist.tmp)
+do
+    fq1=$(ls ${readdir}/${sample}_1_clean*)
+    name=$(echo ${sample} | cut -d "_" -f 1)
+    hisat2 -p 32 \
+    -x ${species}.fasta.base \
+    -U ${fq1} -S ${name}.sam --phred33 --novel-splicesite-outfile ${name}.junctions --rna-strandness F
+done
+rm *tmp
+rm *junctions
+```
+- check the mapping rate for those reads
+```
+[yimingweng@login2 bam_files]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/bam_files
+
+for sam in $(ls SRR* | cut -d "_" -f 1 | sort | uniq)
+do
+    all=$(cat ${sam} | wc -l)
+    mapped=$(cat ${sam} | grep "ptg" | wc -l)
+    unmapped=$(cat ${sam} | grep \*$'\t'0$'\t0' | wc -l)
+    maprate=$(echo ${mapped}/${all} | bc -l)
+    unmaprate=$(echo ${unmapped}/${all} | bc -l)
+    echo -e "${sam}\t${all}\t${mapped}\t${maprate}\t${unmapped}\t${unmaprate}"
+done
+```
+| readname | read_count | mapped_read | mapped_rate | unmapped_read | unmapped_rate|
+| -------- | ---------- | ----------- | ----------- | ------------- | ------------ |
+SRR2147319   | 40353664 | 36264378 | 0.899  | 4089284  | 0.10  |
+SRR2147320   | 50787264 | 46242154 | 0.910  | 4545108  | 0.089 |
+SRR2147321   | 43493648 | 40087596 | 0.921  | 3406050  | 0.078 |
+SRR2147322   | 41577754 | 37805648 | 0.909  | 3772104  | 0.090 |
+SRR2147323   | 64456121 | 58072539 | 0.901  | 6383580  | 0.099 |
+SRR2147324   | 22261676 | 17878864 | 0.803  | 4382812  | 0.197 |
+|
+
+- convert the sam files to bam
+```
+[yimingweng@login2 bam_files]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/bam_files
+
+sbatch -J sam2bam sam2bam.slurm
+
+###########################  script content  ###########################
+#!/bin/bash
+#SBATCH --job-name=%x_sam2bam_%j
+#SBATCH --output=%x_sam2bam_%j.log
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mem-per-cpu=4gb
+#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+
+module load samtools/1.15
+
+for sam in $(ls SRR* | sort | uniq)
+do
+    name=$(echo ${sam} | cut -d "." -f 1)
+    samtools view --threads 16 -b -o ${name}.bam ${sam}
+    samtools sort -m 7G -o ${name}_sorted.bam -T ${name}_temp --threads 16 ${name}.bam
+done
+########################################################################
+```
+
+- check the RNA read coverage, the coverage should be sufficient to cover the intros so that the braker can use it to train GeneMark-ET and to predict the gene model with the spliced alignment information in Augustus.
+```
+[yimingweng@login5 bam_files]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/bam_files
+
+sbatch depth.slurm
+
+###########################  script content  ###########################
+#!/bin/bash
+
+#SBATCH --job-name=tuta_merge_purge_step1
+#SBATCH -o tuta_merge_purge_step1.log
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mem-per-cpu=8gb
+#SBATCH -t 5:00:00
+#SBATCH -c 4
+
+module load samtools/1.15
+
+for bam in $(ls *bam)
+do
+    samtools depth ${bam} | awk '{sum+=$3} END { print "Average = ",sum/NR}' >> depth
+done
+########################################################################
+[yimingweng@login5 bam_files]$ cat depth
+Average =  5.5942 (SRR2147319)
+Average =  7.25236 (SRR2147320)
+Average =  7.34867 (SRR2147321)
+Average =  5.9289 (SRR2147322)
+Average =  8.33535 (SRR2147323)
+Average =  3.22731 (SRR2147324)
+```
+- remove redundant fastq, sam and bam files (just keep the sorted bam files), and run braker with the sorted bam files
+```
+[yimingweng@login2 RNAseq]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq
+
+sbatch -J tuta /blue/kawahara/yimingweng/universal_scripts/braker2_RNA.slurm \
+/blue/kawahara/yimingweng/Tuta_genome_project/assemblies/tuta_final_assembly.fasta \
+tuta_absoluta \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/bamlist
+
+###########################  script content  ###########################
+#!/bin/bash
+#SBATCH --job-name=%x_braker2_RNA_%j
+#SBATCH --output=%x_braker2_RNA_%j.log
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mem-per-cpu=4gb
+#SBATCH --time=120:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+dates;hostname;pwd
+
+genome=${1}
+species=${2}
+bamlist=${3}
+bam=$(cat ${bamlist} | sed -z 's/\n/,/g')
+
+module load conda
+module load braker/2.1.6
+
+braker.pl \
+--AUGUSTUS_CONFIG_PATH=/blue/kawahara/yimingweng/LepidoPhylo_Project/busco_out/Augustus/config \
+--genome=${genome} --species ${species} \
+--bam=${bam} \
+--softmasking --gff3 --cores 32 --AUGUSTUS_ab_initio
+########################################################################
+```
+- Use [TSEBRA](https://github.com/Gaius-Augustus/TSEBRA) to combine the gene models from prothint and RNAseq models.
+```
+[yimingweng@login2 tsebra]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra
+
+sbatch -J tuta /blue/kawahara/yimingweng/universal_scripts/tsebra.slurm \
+/blue/kawahara/yimingweng/Tuta_genome_project/assemblies/tuta_final_assembly.fasta \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/prothint/braker/braker.gtf \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/braker/braker.gtf \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra/tuta_tsebra_default.cgf \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/prothint/braker/hintsfile.gff \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/braker/hintsfile.gff \
+tuta_tsebra_default
+
+###########################  script content  ###########################
+#!/bin/bash
+
+#SBATCH --job-name=%x_tsebra_%j
+#SBATCH -o %x_tsebra_%j.log
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mem-per-cpu=4gb
+#SBATCH -t 24:00:00
+#SBATCH -c 24
+
+module load python3
+
+genome=${1} # the genome assembly
+prothint_gff=${2} # the gtf output from braker using prothint evidence
+rnaseq_gff=${3} # the gtf output from braker using RNAseq evidence
+config=${4} # the config file, the default cfg can be download from the TSEBRA repo
+prothint_hints=${5} # the hintsfile.gff from braker using prothint evidence
+rnaseq_hints=${6} # the hintsfile.gff from braker using RNAseq evidence
+outprefix=${7} # the name for the output file
+
+/blue/kawahara/yimingweng/universal_scripts/TSEBRA/bin/tsebra.py \
+--gtf ${prothint_gff},${rnaseq_gff} \
+-c ${config} \
+-e ${prothint_hints},${rnaseq_hints} \
+-o ${outprefix}.gtf
+
+/blue/kawahara/yimingweng/universal_scripts/Augustus/scripts/gtf2aa.pl \
+${genome} \
+${outprefix}.gtf \
+${outprefix}.aa
+########################################################################
+```
+
+## **11/08/2022**   
+**\# gene model checking and trimming**  
+- check the number of transcript and busco results in the combined model
+```
+[yimingweng@login2 tsebra]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra
+
+# check the number of transcript
+cat tuta_tsebra_default.aa | grep ">" | wc -l
+# 48412
+
+# run busco on the combined gene model
+sbatch -J tuta /blue/kawahara/yimingweng/universal_scripts/busco_gene_model.slurm \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra/tuta_tsebra_default.aa
+
+### Results: C:93.9%[S:75.8%,D:18.1%],F:1.5%,M:4.6%,n:5286
+```
+
+- remove the transcripts without hints support, and redeem the non-supported genes with blast hits
+```
+[yimingweng@login2 tsebra]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra
+
+# trim the transcript with no hint support
+sbatch -J tuta findsupport.slurm \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra/tuta_tsebra_default.gtf \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/prothint/braker/hintsfile.gff \
+/blue/kawahara/yimingweng/Tuta_genome_project/assemblies/tuta_final_assembly.fasta \
+tuta_absoluta
+
+###########################  script content  ###########################
+#!/bin/bash
+#SBATCH --job-name=%x_findsupport_%j
+#SBATCH --output=%x_findsupport_%j.log
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mem-per-cpu=4gb
+#SBATCH --time=48:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+
+combined_gtf=${1} # the gtf file from the combined model
+hintsfile=${2} # the hintsfile.gff from the prothint model
+genome=${3}
+species=${4}
+
+module load prothint/2.6.0
+module load braker/2.1.6
+module load busco/5.3.0
+module load hmmer/3.2.1
+module load diamond/2.0.9
+
+# step 1: extract the genes with full or partial support from the hints
+python3 /blue/kawahara/yimingweng/universal_scripts/selectSupportedSubsets.py ${combined_gtf} ${hintsfile} --fullSupport fullsupport.gff --anySupport ${species}_anySupport.gff --noSupport nosupport.gff
+
+# step 2: redeem genes from nosupport.gff, by blasting them to the databases nr and UniProt
+# step 2.1: get the amino acid sequence
+/blue/kawahara/yimingweng/universal_scripts/Augustus/scripts/gtf2aa.pl ${genome} nosupport.gff ${species}_nosupport.aa
+
+# step 2.2: run diamond to blast the nosupport aa sequences to the nr and UniProt 
+diamond blastp -k 1 -e 0.00001 -d /orange/kawahara/yimingweng/databases/nr.dmnd -q ${species}_nosupport.aa -f 6 -o nosupport_nr.tsv
+diamond blastp -k 1 -e 0.00001 -d /orange/kawahara/yimingweng/databases/uniprot_arthropod.dmnd -q ${species}_nosupport.aa -f 6 -o nosupport_uniprot.tsv
+cat nosupport_nr.tsv nosupport_uniprot.tsv | cut -d $'\t' -f 1 | sort | uniq >> transcript_list
+IFS=$'\n'
+for transcript in $(cat transcript_list); do cat nosupport.gff | grep -Pw ${transcript} | cut -d $'\t' -f 9 | cut -d " " -f 4 | grep -o  "[A-Za-z]_[0-9]*">> redeem_list; done
+
+# step 2.3: add genes with blast hits to the gene model
+cat ${species}_anySupport.gff | cut -d $'\t' -f 9 | cut -d " " -f 4 | grep -o  "[A-Za-z]_[0-9]*" >> redeem_list
+cat redeem_list | sort | uniq >> redeem_list_uniq
+sort -t "_" -k2,2 -n redeem_list_uniq >> redeem_list_uniq_sort
+rm redeem_list redeem_list_uniq
+IFS=$'\n'
+for gene in $(cat redeem_list_uniq_sort); do cat ${combined_gtf} | grep -Pw ${gene} >> ${species}_braker_final.gtf; done
+
+# step 2.3: supported_gene.gtf to generate final gene model fasta to anysupport.aa
+/blue/kawahara/yimingweng/universal_scripts/Augustus/scripts/gtf2aa.pl ${genome} ${species}_braker_final.gtf ${species}_braker_final.aa
+
+# step3: run busco on the subset of the final model (remove smaller isofor)
+python3 /blue/kawahara/yimingweng/universal_scripts/longest_aa.py < ${species}_braker_final.aa > ${species}_tmp.fasta
+
+busco -f -i ${species}_tmp.fasta \
+ -o ./${species}_gene_model_busco_out \
+ -l /data/reference/busco/v5/lineages/lepidoptera_odb10 \
+ -m protein -c 32
+
+rm ${species}_tmp.fasta ${species}_nosupport.aa
+########################################################################
+# BUSCO result: C:93.1%[S:76.8%,D:16.3%],F:1.5%,M:5.4%,n:5286
+```
+
+## **11/17/2022** 
+**\# annotation**  
+**\# braker2**  
+**\# TSEBRA** 
+
+1. Although the model generated from this pipeline looks good in BUSCO (consider the original assembly has 13% duplication rate), the gene number is still way too high. I found that this inflating model is common in braker2 with RNA sequence training model. After trying many different filtering processes including [gFACs](https://gfacs.readthedocs.io/en/latest/), the best model based on gene number and BUSCO is from this pipeline:
+
+<img src="https://github.com/yimingweng/Tuta_genome_project/blob/main/annotation/tuta_gene_model_pipeline.jpg">
+
+And here this the script combining the filtering and transcribe selection (TSEBRA) steps:
+```
+[yimingweng@login6 braker2]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra2
+
+sbatch -J tuta findsupport_tsebra.slurm \
+/blue/kawahara/yimingweng/Tuta_genome_project/assemblies/tuta_final_assembly.fasta \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/prothint \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra2/tuta_tsebra_default.cgf
+
+###########################  script content  ###########################
+#!/bin/bash
+#SBATCH --job-name=%x_findsupport_tsebra_%j
+#SBATCH --output=%x_findsupport_tsebra_%j.log
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mem-per-cpu=4gb
+#SBATCH --time=48:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+
+module load busco/5.3.0
+
+genome=${1}
+RNAdeq=${2}
+prothint=${3} 
+config=${4}
+
+name=$(echo ${config} | cut -d "." -f 1)
+
+# get hint support model from the RNAseq trained model
+python3 /blue/kawahara/yimingweng/universal_scripts/selectSupportedSubsets.py ${RNAdeq}/braker/augustus.hints.gtf ${RNAdeq}/braker/hintsfile.gff --fullSupport rna_fullsupport.gff --anySupport rna_anySupport.gff --noSupport rna_nosupport.gff
+
+# get hint support model from the prothint trained model
+python3 /blue/kawahara/yimingweng/universal_scripts/selectSupportedSubsets.py ${prothint}/braker/augustus.hints.gtf ${prothint}/braker/hintsfile.gff --fullSupport pro_fullsupport.gff --anySupport pro_anySupport.gff --noSupport pro_nosupport.gff
+
+
+/blue/kawahara/yimingweng/universal_scripts/TSEBRA/bin/tsebra.py \
+--gtf pro_anySupport.gff,rna_anySupport.gff \
+-c ${config} \
+-e ${prothint}/braker/hintsfile.gff,${RNAdeq}/braker/hintsfile.gff \
+-o ${name}.gtf
+
+/blue/kawahara/yimingweng/universal_scripts/Augustus/scripts/gtf2aa.pl \
+${genome} \
+${name}.gtf \
+${name}.aa
+
+# run busco on the subset of the final model (remove smaller isofor)
+python3 /blue/kawahara/yimingweng/universal_scripts/longest_aa.py < ${name}.aa > tmp.fasta
+
+busco -f -i tmp.fasta \
+ -o ./single_isoform_busco_out \
+ -l /data/reference/busco/v5/lineages/lepidoptera_odb10 \
+ -m protein -c 32
+rm $tmp.fasta
+
+busco -f -i ${name}.aa \
+ -o ./all_isoform_busco_out \
+ -l /data/reference/busco/v5/lineages/lepidoptera_odb10 \
+ -m protein -c 32
+########################################################################
+BUSCO for single isoform: C:93.1%[S:76.7%,D:16.4%],F:1.3%,M:5.6%,n:5286
+BUSCO for all isoforms: C:93.2%[S:75.9%,D:17.3%],F:1.3%,M:5.5%,n:5286
+```
+
+2. With the final model settled down. I would like to look closer to the model and some of the statistics can be used to compared with models from other gelechiid species (Keferia and Tuta, for example). Here I employed [gFACs](https://gfacs.readthedocs.io/en/latest/) again, but not foe the model trimming but for accessing the statistics of the model.
+
+```
+[yimingweng@login6 gfacs]$ pwd
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/gfacs
+
+sbatch -J tuta_final_model /blue/kawahara/yimingweng/universal_scripts/tuta_tsebra_gfacs2.slurm \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/tsebra/tuta_tsebra_default.gtf \
+/blue/kawahara/yimingweng/Tuta_genome_project/assemblies/tuta_final_assembly.fasta \
+tuta_tesbra_gfacs \
+/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/gfacs
+
+###########################  script content  ###########################
+#!/bin/bash
+#SBATCH --job-name=%x_gfacs_default
+#SBATCH --output=%x_gfacs_default.log
+#SBATCH --mail-user=yimingweng@ufl.edu
+#SBATCH --mail-type=FAIL,END
+#SBATCH --mem-per-cpu=4gb
+#SBATCH --time=48:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+
+module load perl/5.24.1
+
+model=${1}
+genome=${2}
+prefix=${3}
+outdir=${4}
+
+perl /blue/kawahara/yimingweng/universal_scripts/gFACs/gFACs.pl \
+-f braker_2.1.2_gtf \
+-p ${prefix} \
+    --statistics \
+    --statistics-at-every-step \
+--distributions \
+    exon_lengths 10 \
+    intron_lengths 15 \
+    CDS_lengths 20 \
+    gene_lengths 100 \
+    exon_position \
+    exon_position_data \
+    intron_position \
+    intron_position_data \
+--fasta ${genome} \
+    --nt-content \
+--create-gff3 \
+--get-protein-fasta \
+--create-gtf \
+-O ${outdir} \
+${model}
+########################################################################
+```
+
+
+
+
+
 <br />  
 <br />  
 <br />  
@@ -600,3 +1138,5 @@ tuta_prothint
 - 11/02/2022: remove directory `/blue/kawahara/yimingweng/Tuta_genome_project/Tuta_old_hifisam_reassemble`
 - 11/02/2022: remove directory `/blue/kawahara/yimingweng/Tuta_genome_project/Tuta_first_assembly/purge/run2_with_short_reads/*fastq.gz`
 - 11/02/2022: remove directory `/blue/kawahara/yimingweng/Tuta_genome_project/Tuta_first_assembly/purge/run2_with_short_reads/tuta*.bam`
+- 11/08/2022: remove files `/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/raw_reads/*.fastq.gz`
+- 11/08/2022: remove files `/blue/kawahara/yimingweng/Tuta_genome_project/annotation/braker2/RNAseq/bam_files/*sam*`
